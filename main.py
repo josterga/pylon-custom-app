@@ -32,6 +32,7 @@ OMNI_BASE_URL = os.getenv('OMNI_BASE_URL')
 OMNI_MODEL_ID = os.getenv('OMNI_MODEL_ID')
 PYLON_API_KEY = os.getenv('PYLON_API_KEY')
 TYPESENSE_API_KEY = os.getenv('TYPESENSE_API_KEY')
+TYPESENSE_BASE_URL = os.getenv('TYPESENSE_BASE_URL')
 
 if not OMNI_API_KEY:
     logger.error("OMNI_API_KEY not set")
@@ -76,7 +77,7 @@ def get_pylon_issue_body(issue_id: str):
     except Exception as e:
         logger.exception(f"Failed to fetch issue {issue_id}")
 
-TYPESENSE_URL = f"https://3hb7fy1kz94rdwuqp-1.a1.typesense.net/multi_search?x-typesense-api-key={TYPESENSE_API_KEY}"
+TYPESENSE_URL = f"https://{TYPESENSE_BASE_URL}-1.a1.typesense.net/multi_search?x-typesense-api-key={TYPESENSE_API_KEY}"
 TYPESENSE_HEADERS = {
     "accept": "application/json, text/plain, */*",
     "content-type": "text/plain"
