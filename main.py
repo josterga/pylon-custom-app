@@ -11,6 +11,8 @@ from dotenv import load_dotenv
 import time
 from bs4 import BeautifulSoup
 import re
+from sklearn.feature_extraction.text import TfidfVectorizer
+
 
 
 # --- Setup Logging ---
@@ -46,11 +48,38 @@ PYLON_HEADERS = {
     "Content-Type": "application/json",
     "Authorization": f"Bearer {PYLON_API_KEY}"
 }
-
 STOPWORDS = set("""
-a about above after again against all am an and any are as at be because been before being below between both but by can did do does doing down during each few for from further had has have having he her here hers herself him himself his how i if in into is it its itself just me more most my myself no nor not of off on once only or other our ours ourselves out over own same she should so some such than that the their theirs them themselves then there these they this those through to too under until up very was we were what when where which while who whom why will with you your yours yourself yourselves
-please thanks hi hello regards note see ask wanted share request should could would know let make get new set use work issue report show think look found question want need help appreciate attached sent send sending replied reply replying regards sincerely best
+a about above after again am an and are as at be because been before being below but by can did do does doing down further had has have having he her here hers herself him himself his how i ideally if in is it its itself just me my myself no nor not of on or other our ours ourselves out own same she should so some such than that the their theirs them themselves then there these they this those through to too under until up very was we were what when where which while who whom why will with you your yours yourself yourselves please thanks hi hello regards note see ask wanted should could would know let make get new set use work issue show think look found question want need help appreciate attached sent send sending replied reply replying regards sincerely best
 """.split())
+def flatten_and_filter_keywords(keyword_list, stopwords):
+    flat_keywords = set()
+    for item in keyword_list:
+        if isinstance(item, str):
+            if item not in stopwords:
+                flat_keywords.add(item)
+        elif isinstance(item, list) and item and isinstance(item[0], str):
+            if item[0] not in stopwords:
+                flat_keywords.add(item[0])
+    return flat_keywords
+
+def flatten_and_filter_phrases(phrase_list, stopwords):
+    flat_phrases = set()
+    for item in phrase_list:
+        if isinstance(item, str):
+            if not any(w in stopwords for w in item.split()):
+                flat_phrases.add(item)
+        elif isinstance(item, list) and item and isinstance(item[0], str):
+            if not any(w in stopwords for w in item[0].split()):
+                flat_phrases.add(item[0])
+    return flat_phrases
+
+DOMAIN_KEYWORDS_PATH = "domain_keywords.json"
+with open(DOMAIN_KEYWORDS_PATH, "r") as f:
+    domain_data = json.load(f)
+    DOMAIN_KEYWORDS_SET = flatten_and_filter_keywords(domain_data.get("keywords", []), STOPWORDS)
+    DOMAIN_PHRASES_SET = flatten_and_filter_phrases(domain_data.get("phrases", []), STOPWORDS)
+
+
 
 def get_pylon_issue_body(issue_id: str):
     """
@@ -100,7 +129,7 @@ TYPESENSE_SEARCH_BODY_TEMPLATE = {
     ]
 }
 
-def extract_ngrams(text, n=3, stopwords=STOPWORDS, max_stop_ratio=0.5):
+def extract_ngrams(text, n=1, stopwords=STOPWORDS, max_stop_ratio=0.5):
     """
     Extracts n-grams from text, filtering out those where more than max_stop_ratio of words are stopwords.
     """
@@ -139,9 +168,9 @@ def extract_keyword_ngrams(text, ngram_sizes=(3,2,1), min_word_length=3, stopwor
 def omni_docs_top_keyword_ngrams_from_text(text, max_results=3, ngram_sizes=(3,2,1)):
     seen_urls = set()
     doc_links = []
-    keyword_ngrams = extract_keyword_ngrams(text, ngram_sizes=ngram_sizes)
-    logger.info(f"Keyword n-grams for Typesense: {keyword_ngrams}")
-    for phrase in keyword_ngrams:
+    domain_ngrams = extract_domain_ngrams(text, ngram_sizes=ngram_sizes)
+    logger.info(f"Domain n-grams for Typesense: {domain_ngrams}")
+    for phrase in domain_ngrams:
         title, url = search_omni_docs_typesense(phrase)
         if url and url not in seen_urls:
             doc_links.append((title, url))
@@ -205,169 +234,169 @@ def search_omni_docs_typesense(keyword, logger=logging):
         return (None, None)
 
 
-def extract_keywords(text, min_word_length=3, stopwords=STOPWORDS):
+def extract_keywords(text, min_word_length=0, stopwords=STOPWORDS):
     tokens = re.findall(r'\b\w+\b', text.lower())
     keywords = [t for t in tokens if t not in stopwords and len(t) >= min_word_length]
     return keywords
 
 
 
-def omni_docs_best_match_from_text(text):
-    keywords = extract_keywords(text)
-    logger.info(f"[TYPESENSE] Extracted keywords: {keywords}")
-    for kw in keywords:
-        title, url = search_omni_docs_typesense(kw)
-        if url:
-            return title, url
-    return None, None
+# def omni_docs_best_match_from_text(text):
+#     keywords = extract_keywords(text)
+#     logger.info(f"[TYPESENSE] Extracted keywords: {keywords}")
+#     for kw in keywords:
+#         title, url = search_omni_docs_typesense(kw)
+#         if url:
+#             return title, url
+#     return None, None
 
-def search_omni_docs_keywords(text, base_url="https://docs.omni.co"):
-    """
-    Extract keywords, run a docs search for each, return the first hit found.
-    Returns (title, href) tuple, or (None, None) on failure.
-    Includes extensive debugging output.
-    """
-    keywords = extract_keywords(text)
-    logger.info(f"[DEBUG] Docs search keywords: {keywords}")
+# def search_omni_docs_keywords(text, base_url="https://docs.omni.co"):
+#     """
+#     Extract keywords, run a docs search for each, return the first hit found.
+#     Returns (title, href) tuple, or (None, None) on failure.
+#     Includes extensive debugging output.
+#     """
+#     keywords = extract_keywords(text)
+#     logger.info(f"[DEBUG] Docs search keywords: {keywords}")
 
-    for kw in keywords:
-        search_url = f"{base_url}/search?q={requests.utils.quote(kw)}"
-        logger.info(f"[DEBUG] Searching Omni Docs for keyword: '{kw}' at URL: {search_url}")
-        try:
-            resp = requests.get(search_url, timeout=8)
-            logger.info(f"[DEBUG] HTTP status code: {resp.status_code} for keyword '{kw}'")
-            resp.raise_for_status()
-            soup = BeautifulSoup(resp.text, "html.parser")
+#     for kw in keywords:
+#         search_url = f"{base_url}/search?q={requests.utils.quote(kw)}"
+#         logger.info(f"[DEBUG] Searching Omni Docs for keyword: '{kw}' at URL: {search_url}")
+#         try:
+#             resp = requests.get(search_url, timeout=8)
+#             logger.info(f"[DEBUG] HTTP status code: {resp.status_code} for keyword '{kw}'")
+#             resp.raise_for_status()
+#             soup = BeautifulSoup(resp.text, "html.parser")
 
-            hits = soup.find_all("li", class_="DocSearch-Hit")
-            logger.info(f"[DEBUG] Found {len(hits)} DocSearch-Hit elements for '{kw}'")
+#             hits = soup.find_all("li", class_="DocSearch-Hit")
+#             logger.info(f"[DEBUG] Found {len(hits)} DocSearch-Hit elements for '{kw}'")
 
-            if not hits:
-                # Optionally, dump a part of the HTML for diagnostics (limit to first 800 chars)
-                logger.info(f"[DEBUG] No hits found. First 800 chars of HTML: {resp.text[:800]}")
-                continue
+#             if not hits:
+#                 # Optionally, dump a part of the HTML for diagnostics (limit to first 800 chars)
+#                 logger.info(f"[DEBUG] No hits found. First 800 chars of HTML: {resp.text[:800]}")
+#                 continue
 
-            # Show the HTML snippet for the first hit
-            first_hit_html = str(hits[0])
-            logger.info(f"[DEBUG] First DocSearch-Hit HTML snippet:\n{first_hit_html}")
+#             # Show the HTML snippet for the first hit
+#             first_hit_html = str(hits[0])
+#             logger.info(f"[DEBUG] First DocSearch-Hit HTML snippet:\n{first_hit_html}")
 
-            a_tag = hits[0].find("a", href=True)
-            if not a_tag:
-                logger.info(f"[DEBUG] No <a> tag found in first hit for '{kw}'")
-                continue
+#             a_tag = hits[0].find("a", href=True)
+#             if not a_tag:
+#                 logger.info(f"[DEBUG] No <a> tag found in first hit for '{kw}'")
+#                 continue
 
-            href = a_tag['href']
-            # Ensure absolute URL
-            if not href.startswith("http"):
-                href = base_url + href
-            title_elem = a_tag.find(class_="DocSearch-Hit-title")
-            title = title_elem.get_text(" ", strip=True) if title_elem else href
+#             href = a_tag['href']
+#             # Ensure absolute URL
+#             if not href.startswith("http"):
+#                 href = base_url + href
+#             title_elem = a_tag.find(class_="DocSearch-Hit-title")
+#             title = title_elem.get_text(" ", strip=True) if title_elem else href
 
-            logger.info(f"[DEBUG] Docs search hit: title='{title}', href='{href}'")
-            return (title, href)
-        except Exception as e:
-            logger.warning(f"[DEBUG] Docs search failed for keyword '{kw}': {e}")
+#             logger.info(f"[DEBUG] Docs search hit: title='{title}', href='{href}'")
+#             return (title, href)
+#         except Exception as e:
+#             logger.warning(f"[DEBUG] Docs search failed for keyword '{kw}': {e}")
 
-    logger.info("[DEBUG] No documentation hits found for any keywords")
-    return (None, None)
+#     logger.info("[DEBUG] No documentation hits found for any keywords")
+#     return (None, None)
 
-def omni_docs_top_ngrams_from_text(text, max_results=3, ngram_sizes=(3,2)):
-    """
-    Extracts n-grams (e.g. trigrams and bigrams), queries Typesense for each,
-    and returns up to max_results unique doc links.
-    """
-    seen_urls = set()
-    doc_links = []
-    # Try largest n-grams first for specificity
-    for n in ngram_sizes:
-        ngram_phrases = extract_ngrams(text, n)
-        for phrase in ngram_phrases:
-            title, url = search_omni_docs_typesense(phrase)
-            if url and url not in seen_urls:
-                doc_links.append((title, url))
-                seen_urls.add(url)
-                if len(doc_links) >= max_results:
-                    return doc_links
-    return doc_links
+# def omni_docs_top_ngrams_from_text(text, max_results=3, ngram_sizes=(3,2)):
+#     """
+#     Extracts n-grams (e.g. trigrams and bigrams), queries Typesense for each,
+#     and returns up to max_results unique doc links.
+#     """
+#     seen_urls = set()
+#     doc_links = []
+#     # Try largest n-grams first for specificity
+#     for n in ngram_sizes:
+#         ngram_phrases = extract_ngrams(text, n)
+#         for phrase in ngram_phrases:
+#             title, url = search_omni_docs_typesense(phrase)
+#             if url and url not in seen_urls:
+#                 doc_links.append((title, url))
+#                 seen_urls.add(url)
+#                 if len(doc_links) >= max_results:
+#                     return doc_links
+#     return doc_links
 
-def search_omni_docs(query, base_url="https://docs.omni.co"):
-    """
-    Search docs.omni.co with a query and return the top result's URL.
-    Returns (title, href) tuple, or (None, None) on failure.
-    """
-    search_url = f"{base_url}/search?q={requests.utils.quote(query)}"
-    try:
-        resp = requests.get(search_url, timeout=8)
-        resp.raise_for_status()
-        soup = BeautifulSoup(resp.text, "html.parser")
+# def search_omni_docs(query, base_url="https://docs.omni.co"):
+#     """
+#     Search docs.omni.co with a query and return the top result's URL.
+#     Returns (title, href) tuple, or (None, None) on failure.
+#     """
+#     search_url = f"{base_url}/search?q={requests.utils.quote(query)}"
+#     try:
+#         resp = requests.get(search_url, timeout=8)
+#         resp.raise_for_status()
+#         soup = BeautifulSoup(resp.text, "html.parser")
 
-        # Find first hit in search results (DocSearch-Hit class)
-        hit = soup.find("li", class_="DocSearch-Hit")
-        if not hit:
-            return (None, None)
+#         # Find first hit in search results (DocSearch-Hit class)
+#         hit = soup.find("li", class_="DocSearch-Hit")
+#         if not hit:
+#             return (None, None)
 
-        a_tag = hit.find("a", href=True)
-        if not a_tag:
-            return (None, None)
+#         a_tag = hit.find("a", href=True)
+#         if not a_tag:
+#             return (None, None)
         
-        href = a_tag['href']
-        # Ensure absolute URL
-        if not href.startswith("http"):
-            href = base_url + href
-        title_elem = a_tag.find(class_="DocSearch-Hit-title")
-        title = title_elem.get_text(" ", strip=True) if title_elem else href
-        return (title, href)
-    except Exception as e:
-        logger.warning(f"Docs search failed for query '{query}': {e}")
-        return (None, None)
+#         href = a_tag['href']
+#         # Ensure absolute URL
+#         if not href.startswith("http"):
+#             href = base_url + href
+#         title_elem = a_tag.find(class_="DocSearch-Hit-title")
+#         title = title_elem.get_text(" ", strip=True) if title_elem else href
+#         return (title, href)
+#     except Exception as e:
+#         logger.warning(f"Docs search failed for query '{query}': {e}")
+#         return (None, None)
 
-def omni_docs_top_matches_from_text(text, max_results=3):
-    """
-    Returns up to max_results (title, url) tuples from Typesense using extracted keywords.
-    """
-    keywords = extract_keywords(text)
-    logger.info(f"[TYPESENSE] Extracted keywords: {keywords}")
-    seen_urls = set()
-    matches = []
-    for kw in keywords:
-        body = TYPESENSE_SEARCH_BODY_TEMPLATE.copy()
-        body["searches"][0] = body["searches"][0].copy()
-        body["searches"][0]["q"] = kw
+# def omni_docs_top_matches_from_text(text, max_results=3):
+#     """
+#     Returns up to max_results (title, url) tuples from Typesense using extracted keywords.
+#     """
+#     keywords = extract_keywords(text)
+#     logger.info(f"[TYPESENSE] Extracted keywords: {keywords}")
+#     seen_urls = set()
+#     matches = []
+#     for kw in keywords:
+#         body = TYPESENSE_SEARCH_BODY_TEMPLATE.copy()
+#         body["searches"][0] = body["searches"][0].copy()
+#         body["searches"][0]["q"] = kw
 
-        try:
-            resp = requests.post(
-                TYPESENSE_URL,
-                headers=TYPESENSE_HEADERS,
-                data=json.dumps(body),
-                timeout=8
-            )
-            resp.raise_for_status()
-            resp_json = resp.json()
-            results = resp_json.get("results", [])
-            if not results:
-                continue
-            grouped_hits = results[0].get("grouped_hits", [])
-            for group in grouped_hits:
-                hits = group.get("hits", [])
-                if not hits:
-                    continue
-                doc = hits[0]["document"]
-                url = doc["url"]
-                if not url.startswith("http"):
-                    url = "https://docs.omni.co" + url
-                # Deduplicate by URL
-                if url in seen_urls:
-                    continue
-                seen_urls.add(url)
-                # Build a readable title
-                title_parts = [doc.get(f"hierarchy.lvl{i}") for i in range(7) if doc.get(f"hierarchy.lvl{i}")]
-                title = " > ".join(title_parts)
-                matches.append((title, url))
-                if len(matches) >= max_results:
-                    return matches
-        except Exception as e:
-            logger.warning(f"[TYPESENSE] Search failed for '{kw}': {e}")
-    return matches
+#         try:
+#             resp = requests.post(
+#                 TYPESENSE_URL,
+#                 headers=TYPESENSE_HEADERS,
+#                 data=json.dumps(body),
+#                 timeout=8
+#             )
+#             resp.raise_for_status()
+#             resp_json = resp.json()
+#             results = resp_json.get("results", [])
+#             if not results:
+#                 continue
+#             grouped_hits = results[0].get("grouped_hits", [])
+#             for group in grouped_hits:
+#                 hits = group.get("hits", [])
+#                 if not hits:
+#                     continue
+#                 doc = hits[0]["document"]
+#                 url = doc["url"]
+#                 if not url.startswith("http"):
+#                     url = "https://docs.omni.co" + url
+#                 # Deduplicate by URL
+#                 if url in seen_urls:
+#                     continue
+#                 seen_urls.add(url)
+#                 # Build a readable title
+#                 title_parts = [doc.get(f"hierarchy.lvl{i}") for i in range(7) if doc.get(f"hierarchy.lvl{i}")]
+#                 title = " > ".join(title_parts)
+#                 matches.append((title, url))
+#                 if len(matches) >= max_results:
+#                     return matches
+#         except Exception as e:
+#             logger.warning(f"[TYPESENSE] Search failed for '{kw}': {e}")
+#     return matches
 
 
 def poll_omni_job(remaining_job_ids, timeout=30, interval=3):
@@ -517,6 +546,62 @@ def get_omni_query_results(account_id: str):
     logger.info(f"Retrieved DataFrame with {df.shape[0]} rows and {df.shape[1]} columns")
     return df
 
+def extract_domain_ngrams(text, ngram_sizes=(3,2,1)):
+    """
+    Extracts n-grams from text that match domain keywords or phrases.
+    - Unigrams: must be in DOMAIN_KEYWORDS_SET
+    - Bigrams/trigrams: must be in DOMAIN_PHRASES_SET
+    """
+    tokens = re.findall(r'\b\w+\b', text.lower())
+    ngrams = set()
+    for n in ngram_sizes:
+        for i in range(len(tokens) - n + 1):
+            ngram = ' '.join(tokens[i:i+n])
+            if n == 1:
+                if ngram in DOMAIN_KEYWORDS_SET:
+                    ngrams.add(ngram)
+            else:
+                if ngram in DOMAIN_PHRASES_SET:
+                    ngrams.add(ngram)
+    # Return in order: trigrams, bigrams, unigrams
+    ngram_list = []
+    for n in ngram_sizes:
+        ngram_list += [ng for ng in ngrams if len(ng.split()) == n]
+    return ngram_list
+
+def omni_docs_top_weighted_domain_ngrams_from_text(text, max_results=3, ngram_sizes=(3,2,1)):
+    seen_urls = set()
+    doc_links = []
+    weighted_ngrams = extract_weighted_domain_ngrams(text, ngram_sizes=ngram_sizes)
+    # Sort ngrams by weight, descending
+    sorted_ngrams = sorted(weighted_ngrams.items(), key=lambda x: -x[1])
+    print(sorted_ngrams)
+    logger.info(f"Weighted domain n-grams for Typesense: {sorted_ngrams}")
+    for phrase, weight in sorted_ngrams:
+        title, url = search_omni_docs_typesense(phrase)
+        if url and url not in seen_urls:
+            doc_links.append((title, url))
+            seen_urls.add(url)
+            if len(doc_links) >= max_results:
+                break
+    return doc_links
+
+def extract_weighted_domain_ngrams(text, ngram_sizes=(3,2,1)):
+    """
+    Extracts weighted n-grams (TF-IDF) from text, restricted to domain keywords/phrases.
+    """
+    # Build vocabulary: union of keywords and phrases
+    vocabulary = list(DOMAIN_KEYWORDS_SET | DOMAIN_PHRASES_SET)
+    vectorizer = TfidfVectorizer(
+        ngram_range=(1, max(ngram_sizes)),
+        stop_words=None,
+        vocabulary=vocabulary
+    )
+    tfidf_matrix = vectorizer.fit_transform([text.lower()])
+    feature_names = vectorizer.get_feature_names_out()
+    tfidf_scores = tfidf_matrix.toarray()[0]
+    weighted_ngrams = {feature_names[i]: tfidf_scores[i] for i in range(len(feature_names)) if tfidf_scores[i] > 0}
+    return weighted_ngrams
 # --- Routes ---
 @app.route('/', methods=['GET'])
 def root():
@@ -540,7 +625,10 @@ def root():
                 body_html = get_pylon_issue_body(issue_id)
                 if body_html:
                     query = BeautifulSoup(body_html, "html.parser").get_text()[:200]
-                    doc_links = omni_docs_top_keyword_ngrams_from_text(query, max_results=3)
+                    weighted_ngrams = extract_weighted_domain_ngrams(query, ngram_sizes=(3,2,1))
+                    # print("INFO: WEIGHTED_NGRAMS: " + json.dumps(weighted_ngrams, indent=2))
+                    # Use the new domain-aware doc search:
+                    doc_links = omni_docs_top_weighted_domain_ngrams_from_text(query, max_results=4)
                     for title, url in doc_links:
                         doc_link_components.append({
                             "type": "link",
