@@ -1,0 +1,7 @@
+flask
+requests
+python-dotenv
+pandas
+pyarrow
+beautifulsoup4
+scikit-learn

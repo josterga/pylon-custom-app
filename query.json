@@ -1,0 +1,52 @@
+{
+    "query": {
+      "limit": 50000,
+      "sorts": [
+        {
+          "null_sort": "OMNI_DEFAULT",
+          "column_name": "salesforce__account.name",
+          "is_column_sort": "false",
+          "sort_descending": "false"
+        }
+      ],
+      "table": "salesforce__opportunity",
+      "fields": [
+        "salesforce__account.name",
+        "salesforce__account.lifecycle_stage_c",
+        "dbt_czima__organizations.org_url",
+        "dbt_czima__organizations.tenant",
+        "salesforce__account_owner.name",
+        "salesforce__opportunity.lead_solutions_engineer",
+        "salesforce__opportunity.has_ps",
+        "ps_owner.name",
+        "dbt_czima__organizations.raw_link",
+        "dbt_czima__organizations.allows_auto_support_user_creation"
+      ],
+      "pivots": [],
+      "dbtMode": "false",
+      "filters": {
+        "dbt_czima__users.email": {
+          "is_negative": "false",
+          "kind": "EQUALS",
+          "type": "string",
+          "values": [],
+          "appliedLabels": {}
+        }
+      },
+      "modelId": "fc9fb50e-3fc9-4571-9379-b6c8d8388ca1",
+      "version": 7,
+      "controls": [],
+      "rewriteSql": "true",
+      "row_totals": {},
+      "fill_fields": [],
+      "calculations": [],
+      "column_limit": 50,
+      "join_via_map": {},
+      "column_totals": {},
+      "userEditedSQL": "",
+      "default_group_by": "true",
+      "custom_summary_types": {},
+      "join_paths_from_topic_name": "salesforce__opportunity"
+    }
+  }
+  
