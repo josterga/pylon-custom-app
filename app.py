@@ -10,6 +10,7 @@ from pylon_client import PylonClient
 from omni_client import OmniClient
 from typesense_client import TypesenseClient
 from domain_utils import load_domain_sets, extract_weighted_domain_ngrams
+from pylon_client import PylonClient, PylonComponents
 
 # --- Setup ---
 load_dotenv()
@@ -40,27 +41,12 @@ typesense = TypesenseClient(TYPESENSE_BASE_URL, TYPESENSE_API_KEY)
 
 app = Flask(__name__)
 
-# --- Helper: Build link components for Pylon ---
-def build_link_component(title: str, url: str) -> dict:
-    return {
-        "type": "link",
-        "label": f"Related Documentation: {title}",
-        "url": url
-    }
-
-# --- Helper: Build text components for Pylon ---
-def build_text_component(label: str, value: str) -> dict:
-    return {
-        "type": "text",
-        "label": label,
-        "value": value
-    }
+components_helper = PylonComponents()
 
 @app.route('/', methods=['GET'])
 def root():
     req_type = request.args.get('request_type')
 
-    # Verification request
     if req_type == 'verify':
         return jsonify({"code": request.args.get('code')})
 
@@ -68,80 +54,39 @@ def root():
         try:
             account_id = request.args.get('requester_email')
             issue_id = request.args.get('issue_id')
-            components = []
 
-            # --- Step 1: Search related docs from Pylon issue ---
-            doc_links = []
-            if issue_id:
-                body_html = pylon.get_issue_body_html(issue_id)
-                if body_html:
-                    query_text = BeautifulSoup(body_html, "html.parser").get_text()[:200]
-                    weighted_ngrams = extract_weighted_domain_ngrams(query_text, domain_keywords, domain_phrases)
-
-                    for phrase, _ in sorted(weighted_ngrams.items(), key=lambda x: -x[1]):
-                        result = typesense.search_docs(phrase)  # should return (title, url) or None
-                        if result:
-                            title, url = result
-                            doc_links.append({
-                                "type": "link",
-                                "label": f"Related Documentation: {title}",
-                                "url": url
-                            })
-                        if len(doc_links) >= 4:
-                            break
-
-            # --- Step 2: Run Omni query ---
-            sf_query = json.loads(json.dumps(QUERY_TEMPLATE))  # deep copy
+            # --- Step 1: Omni query (unchanged) ---
+            sf_query = json.loads(json.dumps(QUERY_TEMPLATE))
             sf_query["query"]["filters"]["dbt_czima__users.email"]["values"] = [account_id]
-
             df = omni.run_query(sf_query)
 
-            # --- Step 3: Append account info ---
-            if not df.empty:
-                row = df.iloc[0]
-                components = doc_links[:]  # start with doc links
-
-                for col in df.columns:
-                    val = row[col]
-                    val_str = str(val) if pd.notna(val) else "(not available)"
-
-                    if (
-                        isinstance(val_str, str)
-                        and (
-                            val_str.lower().startswith("http")
-                            or "omniapp.co" in val_str.lower()
-                        )
-                    ):
-                        # Ensure valid URL format for Pylon
-                        url_val = val_str
-                        if not url_val.lower().startswith("http"):
-                            url_val = "https://" + url_val.lstrip("/")  # add scheme
-
-                        components.append({
-                            "type": "link",
-                            "label": col.replace("_", " ").title(),
-                            "url": url_val
-                        })
-                    else:
-                        components.append({
-                            "type": "text",
-                            "label": col.replace("_", " ").title(),
-                            "value": val_str
-                        })
-
-                return jsonify({
-                    "version": "1.0.0",
-                    "header": {"title": "Account Info"},
-                    "components": components
-                }), 200
-
-            else:
+            if df.empty:
                 return jsonify({
                     "version": "1.0.0",
                     "header": {"title": "No Data Found"},
                     "components": [],
                     "message": f"No records found for account_id={account_id}"
                 }), 404
+
+            row = df.iloc[0]
+
+            # --- Step 2: Build components via Pylon module helper ---
+            components = components_helper.assemble_issue_plus_row_components(
+                issue_id=issue_id,
+                pylon_client=pylon,
+                typesense_client=typesense,
+                extract_weighted_domain_ngrams=extract_weighted_domain_ngrams,
+                domain_keywords=domain_keywords,
+                domain_phrases=domain_phrases,
+                omni_row=row,
+                max_links=4,
+            )
+
+            return jsonify({
+                "version": "1.0.0",
+                "header": {"title": "Account Info"},
+                "components": components
+            }), 200
 
         except Exception as e:
             logging.exception("Error in fetch_data")
