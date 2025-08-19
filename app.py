@@ -52,12 +52,12 @@ def root():
 
     elif req_type == 'fetch_data':
         try:
-            account_id = request.args.get('requester_email')
+            account_id = request.args.get('account_id')
             issue_id = request.args.get('issue_id')
 
             # --- Step 1: Omni query (unchanged) ---
             sf_query = json.loads(json.dumps(QUERY_TEMPLATE))
-            sf_query["query"]["filters"]["dbt_czima__users.email"]["values"] = [account_id]
+            sf_query["query"]["filters"]["pylon__pylon_issues.account_id"]["values"] = [account_id]
             df = omni.run_query(sf_query)
 
             if df.empty:

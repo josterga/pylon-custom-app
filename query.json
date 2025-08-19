@@ -25,13 +25,12 @@
       "pivots": [],
       "dbtMode": "false",
       "filters": {
-        "dbt_czima__users.email": {
-          "is_negative": "false",
-          "kind": "EQUALS",
-          "type": "string",
-          "values": [],
-          "appliedLabels": {}
-        }
+    "pylon__pylon_issues.account_id": {
+      "is_negative": false,
+      "kind": "EQUALS",
+      "type": "string",
+      "values": []
+    }
       },
       "modelId": "fc9fb50e-3fc9-4571-9379-b6c8d8388ca1",
       "version": 7,
